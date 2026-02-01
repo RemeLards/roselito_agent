@@ -1,0 +1,144 @@
+#!/usr/bin/env python
+
+r'''Replay route waypoints from a file.
+'''
+
+
+import rclpy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
+
+# We need to do these imports in this specific way for the parsing of the nav_msgs.msg.Path message to work.
+import builtin_interfaces.msg
+import geometry_msgs.msg
+import nav_msgs.msg
+import std_msgs.msg
+
+
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+
+from copy import deepcopy
+from sys import exit
+
+from roselito_agent import (
+    get_current_pose,
+    ParameterNode,
+)
+
+DISTANCE_SQUARED_THRESHOLD= 1 
+
+class ReplayRoute(ParameterNode):
+    r'''Replay a route file.
+    '''
+    def __init__(self):
+        r'''Create a new route replayer node.
+        '''
+        super().__init__('replay_route')
+        self.declare_parameter('frequency', 20.0)
+        self.declare_parameter('path', 'route.pon')
+        self.declare_parameter('squared_threshold_distance',1.0)
+
+        self.__squared_threshold_distance = self.get_parameter('squared_threshold_distance').value
+        self.get_logger().info(f'Squared Distance Threshold : {self.__squared_threshold_distance}')
+        self.get_logger().info(f"Current Path : {self.get_parameter('save_path').value}")
+        self.get_logger().info(f"Set Frequency : {self.get_parameter('frequency').value}")
+    
+
+        self.__buffer = Buffer()
+        self.__listener = TransformListener(self.__buffer, self)
+
+        # Parse a nav_msgs.msg.Path message from file.
+        path = self.get_parameter('save_path').value
+        self.__route = eval(''.join(line.strip() for line in open(path)))
+
+        # Needed States
+        self.__poses_available = len(self.__route.poses)
+        self.__current_goal_pose = 0
+        self.__last_goal_pose = 0
+        self.__current_pose = geometry_msgs.msg.PoseStamped()
+
+        self.__pub_goal = self.create_publisher(geometry_msgs.msg.PoseStamped, '/goal_pose', 1)
+
+        period = 1.0 / self.get_parameter('frequency').value
+        self.__timer = self.create_timer(period, self.__callback)
+
+    def __callback(self):
+        r'''Timer callback.
+        '''
+        # TODO: Update this method to perform the following tasks:
+        #
+        # 1. Select the next pose in the route
+        # 2. Publish it as a goal to the navigation stack
+        # 3. Use the TF buffer to check whether the robot is nearing the current goal
+        # 4. When the robot is close enough to the current goal, return to step (1)
+        # 5. After the robot approaches the final goal, terminate the node.
+        #
+        # Remember that THIS METHOD CANNOT LOOP INDEFINITELY, so feel free to add new attributes
+        # to this class as needed, to keep up information on the current status of the operation.
+        # For example, you will probably need an attribute to record the index of the current
+        # goal. You may also want to add new parameters, e.g. for the threshold distance to the
+        # next goal.
+        if self.__poses_available == 0:
+            self.get_logger().info(f"Poses Available {self.__poses_available}, Finishing Callback")
+            self.__timer.cancel()
+            exit()
+        else:
+            # 5. After the robot approaches the final goal, terminate the node.
+            #TODO: Instead of stopping the timer, end the process after reaching the end of the route.
+            if self.__current_goal_pose >= self.__poses_available:
+                self.__timer.cancel()
+                exit()
+        
+            # 1. Select the next pose in the route
+            current_goal_pose = deepcopy(self.__route.poses[self.__current_goal_pose])
+
+            # 2. Publish it as a goal to the navigation stack
+            current_goal_pose.header.stamp = self.get_clock().now().to_msg()
+            self.get_logger().info(f'Publishing pose: {current_goal_pose}')
+            self.__pub_goal.publish(current_goal_pose)
+
+            # 3. Use the TF buffer to check whether the robot is nearing the current goal
+            try:
+                transform = self.__buffer.lookup_transform(
+                    self._global_frame,
+                    self._robot_frame,
+                    rclpy.time.Time()
+                )
+                self.__current_pose = get_current_pose(self.get_clock().now().to_msg(),transform,self._global_frame)
+
+                # 4. When the robot is close enough to the current goal, return to step (1)
+                if ( self.__pose_squared_distance(self.__current_pose,current_goal_pose) <= self.__squared_threshold_distance ):
+                    self.__current_goal_pose+=1
+
+            except TransformException as e:
+                self.get_logger().info(f'Error computing transform from robot to global frame: "{e}"')
+
+    def __pose_squared_distance(
+        self,
+        c_pose: geometry_msgs.msg.PoseStamped,
+        g_pose: geometry_msgs.msg.PoseStamped,
+    ) -> float:
+        dx = c_pose.pose.position.x - g_pose.pose.position.x
+        dy = c_pose.pose.position.y - g_pose.pose.position.y
+        dz = c_pose.pose.position.z - g_pose.pose.position.z
+        self.get_logger().info(f"Goal Distance : {(dx*dx + dy*dy + dz*dz)}")
+        return (dx*dx + dy*dy + dz*dz)
+
+            
+
+
+def main():
+    r'''Start the node.
+    '''
+    rclpy.init()
+
+    node = ReplayRoute()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == '__main__':
+    main()
