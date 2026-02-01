@@ -46,6 +46,11 @@ class TeachRoute(ParameterNode):
         '''
         super().__init__('teach_route')
 
+        self.declare_parameter('auto_save', False)
+        self.declare_parameter('auto_save_frequency', 1.0)
+        self.__auto_save = self.get_parameter("auto_save").value
+        self.__auto_save_frequency = self.get_parameter('auto_save_frequency').value
+
         self.__buffer = Buffer()
         self.__listener = TransformListener(self.__buffer, self)
 
@@ -65,6 +70,13 @@ class TeachRoute(ParameterNode):
         self.__pop = self.create_service(std_srv.Trigger, '~/pop', self.__callback_pop)
         self.__save = self.create_service(SaveRouteInterface, '~/save', self.__callback_save)
 
+        if self.__auto_save:
+            period = 1.0 / self.__auto_save_frequency
+            self.__auto_save_timer = self.create_timer(period, self.__callback_auto_save)
+            self.__auto_push_timer = self.create_timer(period, self.__callback_auto_push)
+            self.get_logger().info(f"Auto Saving Route Enabled.")
+            self.get_logger().info(f"Setted Auto Saving Frequency : {self.__auto_save_frequency}Hz.")
+
     def __callback_push(self, request, response):
         r'''Handle a waypoint recording service request.
         '''
@@ -78,13 +90,8 @@ class TeachRoute(ParameterNode):
             response.success = False
             response.message = f'Error computing transform from robot to global frame: "{e}"'
             return response
-
-        now = self.get_clock().now().to_msg()
-
-        self.__route.poses.append(get_current_pose(now,transform,self._global_frame))
-        self.__route.header.stamp = now
-
-        self.__pub_route.publish(self.__route)
+        
+        self.__push_waypoint(transform)
 
         response.success = True
         return response
@@ -111,6 +118,36 @@ class TeachRoute(ParameterNode):
 
         response.success = True
         return response
+    
+    def __callback_auto_push(self):
+        r'''Handle automatic waypoint recording.
+        '''
+        try:
+            transform = self.__buffer.lookup_transform(
+                self._global_frame,
+                self._robot_frame,
+                rclpy.time.Time()
+            )
+            self.__push_waypoint(transform)
+        except TransformException as e:
+            self.get_logger().info(f'Error computing transform from robot to global frame: "{e}"')
+    
+    def __callback_auto_save(self):
+        r'''Handle the auto saving poses file.
+        '''
+        try:
+            with open(self._save_path, 'w') as out:
+                out.write(f'{repr(self.__route)}\n')
+        except Exception as e:
+            self.get_logger().info(f"Error while opening writing file to path '{self._save_path}' : Error {type(e).__name__}.")
+    
+    def __push_waypoint(self,transform) -> None:
+        r'''Handle waypoint recording.
+        '''
+        now = self.get_clock().now().to_msg()
+        self.__route.poses.append(get_current_pose(now,transform,self._global_frame))
+        self.__route.header.stamp = now
+        self.__pub_route.publish(self.__route)
 
 
 def main():
