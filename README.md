@@ -9,6 +9,11 @@ To start the route recorder, call:
 ros2 launch roselito_agent teach_route.launch save_path:=/absolute/path/to/route.pon
 ```
 
+To start auto record path:
+```bash
+ros2 launch roselito_agent teach_route.launch auto_save:={bool} auto_save_frequency:={float}
+```
+
 The `save_path` argument can be omitted, in which case the route is saved to a file named `route.pon` in the current folder.
 
 To add the robot's current pose to the route, call:
@@ -26,9 +31,19 @@ To save the route file, call:
 ros2 launch roselito_agent save_route.launch
 ```
 
+To save a route to a different path, instead of the path specified on the teach_route:
+```bash
+ros2 service call /teach_route/save roselito_interfaces/srv/SaveRouteInterface '{path: /absolute/path/to/route.pon }'
+```
+
 To replay a recorded route, call:
 ```bash
 ros2 launch roselito_agent replay_route.launch path:=/absolute/path/to/route.pon
+```
+
+To set the squared path distance threshold, call:
+```bash
+ros2 launch roselito_agent replay_route.launch squared_threshold_distance:={float}
 ```
 
 The `path` argument can be omitted, in which case the route is loaded from a file named `route.pon` in the current folder.
